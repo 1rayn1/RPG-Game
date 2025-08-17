@@ -28,7 +28,7 @@ class Item:
 
 class Skill:
     def __init__(self, name, description, skill_type, mana_cost=0, stamina_cost = 0, cooldown=0,
-                 required_class=None, rank="C", passive=False, level_required=1, custom_name=None,):
+                 required_class=None, rank="C", passive=False, level_required=1, custom_name=None, effect = None, duration = 0, power = 1.0):
         self.name = name
         self.custom_name = custom_name or name  # Default to original name if no custom name given
         self.description = description
@@ -40,6 +40,9 @@ class Skill:
         self.rank = rank
         self.passive = passive
         self.level_required = level_required
+        self.effect = effect
+        self.duration = duration
+        self.power = power
 
     def __repr__(self):
         return f"<Skill: {self.custom_name} ({self.rank})>"
@@ -144,7 +147,8 @@ def load_game():
     return None
 
 #This is how the user fights moonsters
-def battle(stdscr, monster_name, stats, inventory, skills, level_range=(1, 1)):
+def battle(stdscr, monster_name, stats, inventory, skills, level_range=(1, 1),):
+    empowered = 1
     monster = create_monster(monster_name, level_range)
     player_hp = stats["hp"]
     player_mp = stats["current_mana"]  # Start with current mana
@@ -173,6 +177,7 @@ def battle(stdscr, monster_name, stats, inventory, skills, level_range=(1, 1)):
         elif key == ord('a'):
             last_action = "attack"
 
+
         # ---- Player action ----
         if last_action == "attack":
             damage = max(stats["attack"] + weapon_damage - 1, 1)
@@ -180,13 +185,23 @@ def battle(stdscr, monster_name, stats, inventory, skills, level_range=(1, 1)):
             stdscr.addstr(5, 0, f"You attack for {damage} damage!")
         else:
             skill_obj = next((sk for sk in skills if sk.name == last_action), None)
+
+            if skill_obj.effect == "damage_buff":
+                empowered = skill_obj.effect
+                stdscr.addstr(5, 0, "Your entire body glows with power!")
+            elif skill_obj.effect == "mons_defense_debuff":
+                monster.defense = max(0, monster.defense - skill_obj.power)
+
+
+
+
             if (
                 skill_obj
                 and stats["level"] >= skill_obj.level_required
                 and stats["current_mana"] >= skill_obj.mana_cost
                 and skill_cooldowns[skill_obj.name] == 0
             ):
-                stats["current_mana"] -= skill_obj.mana_cost
+                player_mp -= skill_obj.mana_cost
                 skill_cooldowns[skill_obj.name] = skill_obj.cooldown
 
                 if skill_obj.name == "Fireball":
@@ -594,19 +609,19 @@ def main(stdscr):
         # Later in the code, after choosing a class
         if stats["class_path"] == "Swordsman":
             player_skills.extend([
-                Skill("Power Strike", "A strong physical attack.", "active", mana_cost=0, stamina_cost = 3, cooldown=5, required_class="Swordsman", rank="C", level_required=1),
-                Skill("Quick Jab", "A fast, weak jab.", "active", mana_cost=0, stamina_cost = 2, cooldown=3, required_class="Swordsman", rank="D", level_required=1),
+                Skill("Power Strike", "A strong physical attack.", "active", mana_cost=0, stamina_cost = 3, cooldown=5, required_class="Swordsman", rank="C", level_required=1, effect = "damage_buff", duration = 1, power = 2),
+                Skill("Quick Jab", "A fast, weak jab.", "active", mana_cost=0, stamina_cost = 2, cooldown=3, required_class="Swordsman", rank="D", level_required=1, effect = "mons_defense_debuff", duration = 2, power = 0.8),
             ])
         elif stats["class_path"] == "Mage":
             player_skills.extend([
-                Skill("Fireball", "A ball of fire.", "active", mana_cost=8, stamina_cost = 1, cooldown=7, required_class="Mage", rank="C", level_required=1),
-                Skill("Arcane Bolt", "A bolt of arcane energy.", "active", mana_cost=4, stamina_cost = 1, cooldown=6, required_class="Mage", rank="D", level_required=1),
+                Skill("Fireball", "A ball of fire.", "active", mana_cost=8, stamina_cost = 1, cooldown=7, required_class="Mage", rank="C", level_required=1, effect = "damage_buff", duration = 2, power = 1.5),
+                Skill("Arcane Bolt", "A bolt of arcane energy.", "active", mana_cost=4, stamina_cost = 1, cooldown=6, required_class="Mage", rank="D", level_required=1, effect = "damage_buff", duration = 1, power = 1.6),
             ])
         
         elif stats["class_path"] == "Cleric":
             player_skills.extend([
-                Skill("Heal", "A pulse of holy light heals allies.", "active", mana_cost=10, stamina_cost = 1, cooldown=2, required_class="Cleric", rank="C", level_required=1),
-                Skill("Purify", "A pulse of holy light weakens enemies.", "active", mana_cost=8, stamina_cost = 1, cooldown=5, required_class="Cleric", rank="D", level_required=1),
+                Skill("Heal", "A pulse of holy light heals allies.", "active", mana_cost=10, stamina_cost = 1, cooldown=2, required_class="Cleric", rank="C", level_required=1, effect = "hp_buff", duration = 1, power = None),
+                Skill("Purify", "A pulse of holy light weakens enemies.", "active", mana_cost=8, stamina_cost = 1, cooldown=5, required_class="Cleric", rank="D", level_required=1, effect = "damage_buff", duration = 1, power = 1.2),
             ])
 
 
@@ -647,21 +662,21 @@ def main(stdscr):
                 # Determine monster list and spawn chance
                 if zone_name == "slime":
                     if random.random() < 0.20:
-                        if not battle(stdscr, "Slime", stats, inventory, player_skills, level_range):
+                        if not battle(stdscr, "Slime", stats, inventory, player_skills, level_range, stats["class_path"]):
                             player_x, player_y = 0, 0
                 elif zone_name == "goblin":
                     if random.random() < 0.10:
-                        if not battle(stdscr, "Goblin", stats, inventory, player_skills, level_range):
+                        if not battle(stdscr, "Goblin", stats, inventory, player_skills, level_range, stats["class_path"]):
                             player_x, player_y = 0, 0
                 elif zone_name == "orc":
                     if random.random() < 0.08:
-                        if not battle(stdscr, "Orc", stats, inventory, player_skills, level_range):
+                        if not battle(stdscr, "Orc", stats, inventory, player_skills, level_range, stats["class_path"]):
                             player_x, player_y = 0, 0
                 elif zone_name == "mixed":
                     if random.random() < 0.15:
                         monsters = [("Slime", 0.4), ("Goblin", 0.3), ("Kobold", 0.2), ("Orc", 0.1)]
                         chosen = pick_monster(monsters)
-                        if not battle(stdscr, chosen, stats, inventory, player_skills, level_range):
+                        if not battle(stdscr, chosen, stats, inventory, player_skills, level_range, stats["class_path"]):
                             player_x, player_y = 0, 0
                 break  # Only one zone can apply
             
