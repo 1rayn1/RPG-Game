@@ -28,7 +28,7 @@ class Item:
 
 class Skill:
     def __init__(self, name, description, skill_type, mana_cost=0, stamina_cost = 0, cooldown=0,
-                 required_class=None, rank="C", passive=False, level_required=1, custom_name=None,):
+                 required_class=None, rank="C", passive=False, level_required=1, custom_name=None, effect = None, duration=0, power = 1):
         self.name = name
         self.custom_name = custom_name or name  # Default to original name if no custom name given
         self.description = description
@@ -40,6 +40,9 @@ class Skill:
         self.rank = rank
         self.passive = passive
         self.level_required = level_required
+        self.effect = effect
+        self.duration = duration
+        self.power = power
 
     def __repr__(self):
         return f"<Skill: {self.custom_name} ({self.rank})>"
@@ -107,7 +110,7 @@ def gain_xp(stats, amount):
     return leveled_up
 
 #Saves the game to savegame.json
-def save_game(stats, player_x, player_y):
+def save_game(stats, player_x, player_y, npcs):
     data = {
         "stats": stats,
         "player_x": player_x,
@@ -116,7 +119,8 @@ def save_game(stats, player_x, player_y):
             str(pos): {
                 "progress": npc.get("quest", {}).get("progress", 0),
                 "completed": npc.get("quest", {}).get("completed", False),
-                "reward_given": npc.get("quest", {}).get("reward_given", False)
+                "reward_given": npc.get("quest", {}).get("reward_given", False),
+                "accepted": npc.get("quest", {}).get("accepted", False),
             } for pos, npc in npcs.items() if "quest" in npc
         }
     }
@@ -124,60 +128,123 @@ def save_game(stats, player_x, player_y):
         json.dump(data, f)
 
 #Once saved, this function allows the user to restart their progress(if they saved it)
-def load_game():
+def load_game(npcs):
     if os.path.exists(SAVE_FILE):
         with open(SAVE_FILE, "r") as f:
             data = json.load(f)
         stats, player_x, player_y = data["stats"], data["player_x"], data["player_y"]
 
-        # Fallback for older saves: ensure 'class_path' exists
-        if "class_path" not in stats:
-            stats["class_path"] = None
+        # Fallbacks for older saves
+        stats.setdefault("class_path", None)
+        stats.setdefault("current_mana", stats.get("mana", 10))
 
         for pos_str, quest_data in data.get("quests", {}).items():
             pos = eval(pos_str)
             if pos in npcs and "quest" in npcs[pos]:
-                npcs[pos]["quest"]["progress"] = quest_data.get("progress", 0)
-                npcs[pos]["quest"]["completed"] = quest_data.get("completed", False)
-                npcs[pos]["reward_given"] = quest_data.get("reward_given", False)
+                q = npcs[pos]["quest"]
+                q["progress"] = quest_data.get("progress", q.get("progress", 0))
+                q["completed"] = quest_data.get("completed", q.get("completed", False))
+                q["reward_given"] = quest_data.get("reward_given", q.get("reward_given", False))
+                q["accepted"] = quest_data.get("accepted", q.get("accepted", False))
         return stats, player_x, player_y
     return None
+
+def total_modifier(effects_list, effect_type, key="amount"):
+    return sum(e.get(key, 0) for e in effects_list if e.get("type") == effect_type)
+
+def tick_effects_and_apply(stdscr, player_hp, monster_hp, player_debuffs, monster_debuffs, monster, stats):
+    # Apply monster debuffs
+    kept = []
+    for d in monster_debuffs:
+        if d["type"] == "burn":
+            burn_dmg = d.get("amount", 3)
+            monster_hp -= burn_dmg
+            stdscr.addstr(8, 0, f"{monster.name} takes {burn_dmg} burn damage!\n")
+        d["duration"] -= 1
+        if d["duration"] > 0:
+            kept.append(d)
+    monster_debuffs[:] = kept
+
+    # Apply player debuffs
+    kept = []
+    for d in player_debuffs:
+        if d["type"] == "poison":
+            poison_dmg = d.get("amount", 2)
+            player_hp -= poison_dmg
+            stdscr.addstr(9, 0, f"You take {poison_dmg} poison damage!\n")
+        d["duration"] -= 1
+        if d["duration"] > 0:
+            kept.append(d)
+    player_debuffs[:] = kept
+
+    return player_hp, monster_hp
 
 #This is how the user fights moonsters
 def battle(stdscr, monster_name, stats, inventory, skills, level_range=(1, 1)):
     monster = create_monster(monster_name, level_range)
     player_hp = stats["hp"]
-    player_mp = stats["current_mana"]  # Start with current mana
+    player_mp = stats["current_mana"]
     monster_hp = monster.hp
     weapon_damage = inventory[stats["wielded_index"]].damage if stats.get("wielded_index") is not None else 0
 
     skill_cooldowns = {skill.name: 0 for skill in skills}
-    last_action = "attack"  # Default action
+    last_action = "attack"
+
+    # Buff/Debuff trackers
+    player_buffs = []
+    player_debuffs = []
+    monster_buffs = []
+    monster_debuffs = []
+
+    attack_multiplier = 1
 
     while player_hp > 0 and monster_hp > 0:
         stdscr.clear()
         stdscr.addstr(0, 0, f"{monster.name} (Lv {monster.level}) HP: {monster_hp}")
         stdscr.addstr(1, 0, f"Your HP: {player_hp}, MP: {stats['current_mana']}/{stats['mana']}")
-        stdscr.addstr(3, 0, "Press a number key to change skill, or just press Enter to continue.")
+        stdscr.addstr(3, 0, "Press number key to choose skill, or 'a' to attack.")
         stdscr.refresh()
 
-        stdscr.timeout(1000)  # 1 second to change action, else continue
+        stdscr.timeout(1000)
         key = stdscr.getch()
         stdscr.timeout(-1)
 
-        # Skill selection
+        # ---- Player input ----
         if ord('1') <= key <= ord(str(min(9, len(skills)))):
             idx = key - ord('1')
-            chosen_skill = skills[idx]
-            last_action = chosen_skill.name
+            last_action = skills[idx].name
         elif key == ord('a'):
             last_action = "attack"
 
+        # ---- Apply buffs/debuffs ----
+        # Tick monster debuffs
+        kept = []
+        for d in monster_debuffs:
+            if d["type"] == "burn":
+                monster_hp -= d["amount"]
+                stdscr.addstr(8, 0, f"{monster.name} takes {d['amount']} burn damage!")
+            d["duration"] -= 1
+            if d["duration"] > 0:
+                kept.append(d)
+        monster_debuffs[:] = kept
+
+        # Tick player debuffs
+        kept = []
+        for d in player_debuffs:
+            if d["type"] == "poison":
+                player_hp -= d["amount"]
+                stdscr.addstr(9, 0, f"You take {d['amount']} poison damage!")
+            d["duration"] -= 1
+            if d["duration"] > 0:
+                kept.append(d)
+        player_debuffs[:] = kept
+
         # ---- Player action ----
         if last_action == "attack":
-            damage = max(stats["attack"] + weapon_damage - 1, 1)
+            damage = max(int((stats["attack"] + weapon_damage) * attack_multiplier), 1)
             monster_hp -= damage
             stdscr.addstr(5, 0, f"You attack for {damage} damage!")
+            attack_multiplier = 1  # reset after using empowered attack
         else:
             skill_obj = next((sk for sk in skills if sk.name == last_action), None)
             if (
@@ -189,20 +256,28 @@ def battle(stdscr, monster_name, stats, inventory, skills, level_range=(1, 1)):
                 stats["current_mana"] -= skill_obj.mana_cost
                 skill_cooldowns[skill_obj.name] = skill_obj.cooldown
 
-                if skill_obj.name == "Fireball":
-                    dmg = stats["attack"] + 5
-                    monster_hp -= dmg
-                    stdscr.addstr(5, 0, f"You cast Fireball for {dmg} damage!")
-                elif skill_obj.name == "Heal":
-                    heal = 10
-                    player_hp += heal
+                if skill_obj.effect == "empower_next_attack":
+                    attack_multiplier = skill_obj.power
+                    stdscr.addstr(5, 0, "Your next attack is empowered!")
+                elif skill_obj.effect == "lower_enemy_def":
+                    monster.defense = max(0, monster.defense - skill_obj.power)
+                    monster_debuffs.append({"type": "def_down", "amount": skill_obj.power, "duration": skill_obj.duration})
+                    stdscr.addstr(5, 0, f"{monster.name}'s defense is lowered!")
+                elif skill_obj.effect == "heal":
+                    heal = skill_obj.power
+                    player_hp = min(player_hp + heal, stats["hp"])
                     stdscr.addstr(5, 0, f"You heal for {heal} HP!")
-                else:
-                    dmg = stats["attack"] + 3
-                    monster_hp -= dmg
-                    stdscr.addstr(5, 0, f"You use {skill_obj.custom_name} for {dmg} damage!")
+                elif skill_obj.effect == "burn":
+                    monster_debuffs.append({"type": "burn", "amount": skill_obj.power, "duration": skill_obj.duration})
+                    stdscr.addstr(5, 0, f"{monster.name} is burning!")
+                elif skill_obj.effect == "weaken_enemy":
+                    monster.attack = max(0, monster.attack - skill_obj.power)
+                    monster_debuffs.append({"type": "attack_down", "amount": skill_obj.power, "duration": skill_obj.duration})
+                    stdscr.addstr(5, 0, f"{monster.name}'s attack is lowered!")
+                # add more skill effects as needed
             else:
-                damage = max(stats["attack"] + weapon_damage - 1, 1)
+                # fallback if skill unusable
+                damage = max(int(stats["attack"] + weapon_damage), 1)
                 monster_hp -= damage
                 stdscr.addstr(5, 0, f"{last_action} unavailable, you attack for {damage} damage!")
                 last_action = "attack"
@@ -218,7 +293,7 @@ def battle(stdscr, monster_name, stats, inventory, skills, level_range=(1, 1)):
             if skill_cooldowns[name] > 0:
                 skill_cooldowns[name] -= 1
 
-        # ---- Mana regeneration (1 per sec) ----
+        # ---- Mana regen ----
         if stats["current_mana"] < stats["mana"]:
             stats["current_mana"] = min(stats["mana"], stats["current_mana"] + 1)
 
@@ -228,27 +303,26 @@ def battle(stdscr, monster_name, stats, inventory, skills, level_range=(1, 1)):
     # ---- Battle result ----
     stdscr.clear()
     if player_hp > 0:
-        base_xp = {"Slime": 5, "Goblin": 10, "Kobold": 15, "Orc": 40}.get(monster.name.replace("Elite ", ""), 5)
-        xp_gain = base_xp + (monster.level * 2)
-        if monster.elite:
-            xp_gain *= 2
-
-        leveled_up = gain_xp(stats, xp_gain)
-        stdscr.addstr(0, 0, f"You defeated the {monster.name}! You gained {xp_gain} XP.")
-
-        # Quest progress
-        for npc in npcs.values():
-            quest = npc.get("quest")
-            if quest and not quest["completed"]:
-                if quest["type"] == "kill" and quest["target"] == monster.name:
+        # Update kill quests automatically
+        for npc_pos, npc_data in npcs.items():
+            quest = npc_data.get("quest")
+            if quest and quest.get("type") == "kill" and not quest.get("completed"):
+                if monster.name.replace("Elite ", "") == quest["target"]:
                     quest["progress"] += 1
                     if quest["progress"] >= quest["count"]:
                         quest["completed"] = True
 
+        base_xp = {"Slime": 5, "Goblin": 10, "Kobold": 15, "Orc": 40}.get(monster.name.replace("Elite ", ""), 5)
+        xp_gain = base_xp + (monster.level * 2)
+        if monster.elite:
+            xp_gain *= 2
+        leveled_up = gain_xp(stats, xp_gain)
+        stdscr.addstr(0, 0, f"You defeated the {monster.name}! You gained {xp_gain} XP.")
         if leveled_up:
             stdscr.addstr(1, 0, f"You leveled up to level {stats['level']}! +5 skill points!")
         stdscr.refresh()
         stdscr.getch()
+        stats["current_mana"] = min(stats["current_mana"], stats["mana"])
         return True
     else:
         lost_xp = stats["xp"] // 2
@@ -258,9 +332,7 @@ def battle(stdscr, monster_name, stats, inventory, skills, level_range=(1, 1)):
         stdscr.refresh()
         stdscr.getch()
         return False
-
 def skill_menu(stdscr, skills):
-    """Display all skills with detailed information."""
     pos = 0
     while True:
         stdscr.clear()
@@ -270,7 +342,6 @@ def skill_menu(stdscr, skills):
         if not skills:
             stdscr.addstr(3, 0, "You have no skills yet.")
         else:
-            # Show one skill at a time (could expand to multiple later)
             skill = skills[pos]
             stdscr.addstr(3, 0, f"Name: {skill.custom_name} (Original: {skill.name})")
             stdscr.addstr(4, 0, f"Rank: {skill.rank}")
@@ -281,9 +352,10 @@ def skill_menu(stdscr, skills):
             stdscr.addstr(9, 0, f"Required Class: {skill.required_class or 'None'}")
             stdscr.addstr(10, 0, f"Level Required: {skill.level_required}")
             stdscr.addstr(11, 0, f"Passive: {'Yes' if skill.passive else 'No'}")
-            stdscr.addstr(13, 0, f"Description: {skill.description}")
-
-            stdscr.addstr(15, 0, f"[{pos+1}/{len(skills)}]")
+            stdscr.addstr(12, 0, f"Duration: {skill.duration}")
+            stdscr.addstr(13, 0, f"Power: {skill.power}")
+            stdscr.addstr(15, 0, f"Description: {skill.description}")
+            stdscr.addstr(17, 0, f"[{pos+1}/{len(skills)}]")
 
         stdscr.refresh()
         key = stdscr.getch()
@@ -439,15 +511,14 @@ def main(stdscr):
     curses.start_color()
     curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)
 
-    #Determines the minimal screen size, or it crashes.
     viewport_width, viewport_height = 20, 10
     world = {}
 
     bush_zones = {
         "slime": {
             "tiles": [(1, 1), (1, 2), (2, 0), (2, 1), (2, 2), (3, 0), (3, 1),
-                    (3, 2), (1,3), (1,4), (2,3), (2,4), (3,3), (3,4), (4,2),
-                    (4,3), (5,3), (6,3), (7,3), (5,2), (6,2)],
+                       (3, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 3), (3, 4), (4, 2),
+                       (4, 3), (5, 3), (6, 3), (7, 3), (5, 2), (6, 2)],
             "level_range": (1, 3)
         },
         "goblin": {
@@ -472,8 +543,7 @@ def main(stdscr):
 
     stats = {
         "hp": 20, "attack": 5, "defense": 1, "speed": 2,
-        "mana": 10,  # Max mana
-        "current_mana": 10,  # Current mana (changes in battle)
+        "mana": 10, "current_mana": 10,
         "skill_points": 0, "xp": 0, "level": 1,
         "wielded_index": None,
         "class_path": None
@@ -483,11 +553,13 @@ def main(stdscr):
     starter_sword = Item("Rusty Sword", damage=3, dex=0, crit=1, mana=0)
     inventory.append(starter_sword)
 
-    #The starting coordinates(Unless you moved before, and the game is saved)
+    # Persistent skills (so rename/cooldowns aren't rebuilt every frame)
+    player_skills = []
+
     player_x, player_y = 0, 0
     choice = start_menu(stdscr)
     if choice == "Load Game":
-        loaded = load_game()
+        loaded = load_game(npcs)
         if loaded:
             stats, player_x, player_y = loaded
         else:
@@ -497,15 +569,12 @@ def main(stdscr):
     elif choice == "Quit":
         return
 
-    #This gets the landmarks to put on the grid.
-    
     def get_landmark_at(x, y):
         for icon, pos in landmarks.items():
             if (x, y) in pos:
                 return icon
         return None
 
-    #This picks the monsters to battle the user
     def pick_monster(monsters):
         total = sum(chance for _, chance in monsters)
         r = random.random() * total
@@ -515,8 +584,8 @@ def main(stdscr):
                 return monster
             upto += chance
         return monsters[-1][0]
-    
-    #This sets up the map
+
+    # Main map loop
     while True:
         stdscr.clear()
         top_left_x = player_x - viewport_width // 2
@@ -541,93 +610,122 @@ def main(stdscr):
                         stdscr.addstr(y, screen_x, world.get((world_x, world_y), ".") + " ")
 
         stdscr.addstr(viewport_height + 1, 0, f"Level: {stats['level']} XP: {stats['xp']}/{stats['level'] * 10} Skill Pts: {stats['skill_points']}")
-        stdscr.addstr(viewport_height + 2, 0, "Arrows = move | q = quit | u = upgrade | i = inventory | k = skill rename | p = skill window | s = save | l = load")
+        stdscr.addstr(viewport_height + 2, 0, "Arrows = move | q = quit | u = upgrade | i = inventory | k = rename skills | p = skills window | s = save | l = load")
 
-        #This is the npc part
+        # NPC interaction
         if (player_x, player_y) in npcs:
-                    npc = npcs[(player_x, player_y)]
-                    stdscr.addstr(viewport_height + 3, 0, npc["dialogue"])
-                    quest = npc.get("quest")
-                    if quest:
-                        if quest["type"] == "class":
-                            if stats["class_path"] is None:
-                                if not quest["accepted"]:
-                                    stdscr.addstr(viewport_height + 4, 0, f"Do you want to become a {quest['class_name']}? Press 'y' to accept.")
-                                    stdscr.refresh()
-                                    key = stdscr.getch()
-                                    if key == ord('y'):
-                                        quest["accepted"] = True
-                                        stats["class_path"] = quest["class_name"]
-                                        stdscr.addstr(viewport_height + 5, 0, f"You are now on the path of the {quest['class_name']}!")
-                                        stdscr.getch()
-                                else:
-                                    stdscr.addstr(viewport_height + 4, 0, f"Class quest: Prove yourself to become a {quest['class_name']}.")
-                            else:
-                                if stats["class_path"] != quest["class_name"]:
-                                    stdscr.addstr(viewport_height + 4, 0, "You have chosen a different path. You cannot become this class.")
-                                else:
-                                    stdscr.addstr(viewport_height + 4, 0, f"Continue your path as a {stats['class_path']}.")
+            npc = npcs[(player_x, player_y)]
+            stdscr.addstr(viewport_height + 3, 0, npc["dialogue"])
+            quest = npc.get("quest")
+            if quest:
+                if quest["type"] == "class":
+                    if stats["class_path"] is None:
+                        if not quest.get("accepted", False):
+                            stdscr.addstr(viewport_height + 4, 0, f"Do you want to become a {quest['class_name']}? Press 'y' to accept.")
+                            stdscr.refresh()
+                            key = stdscr.getch()
+                            if key == ord('y'):
+                                quest["accepted"] = True
+                                stats["class_path"] = quest["class_name"]
+                                stdscr.addstr(viewport_height + 5, 0, f"You are now on the path of the {quest['class_name']}!")
+                                # Give starting skills for the chosen class
+                                player_skills.clear()
+                                if stats["class_path"] == "Swordsman":
+                                    player_skills.extend([
+                                        Skill(
+                                            "Power Strike",
+                                            "Your next attack deals 2x damage.",
+                                            "active", mana_cost=0, stamina_cost=3, cooldown=5,
+                                            required_class="Swordsman", rank="C", level_required=1,
+                                            effect="empower_next_attack", duration=1, power=2.0
+                                        ),
+                                        Skill(
+                                            "Quick Jab",
+                                            "Lower the enemy's defense for 3 turns.",
+                                            "active", mana_cost=0, stamina_cost=2, cooldown=3,
+                                            required_class="Swordsman", rank="D", level_required=1,
+                                            effect="lower_enemy_def", duration=3, power=2
+                                        ),
+                                    ])
+                                elif stats["class_path"] == "Mage":
+                                    player_skills.extend([
+                                        Skill(
+                                            "Fireball",
+                                            "Ignite the enemy (burn 3 dmg x2 turns).",
+                                            "active", mana_cost=8, stamina_cost=1, cooldown=7,
+                                            required_class="Mage", rank="C", level_required=1,
+                                            effect="burn", duration=2, power=3
+                                        ),
+                                        Skill(
+                                            "Ice Barrage",
+                                            "Empower your next attack by 1.2x.",
+                                            "active", mana_cost=4, stamina_cost=1, cooldown=6,
+                                            required_class="Mage", rank="D", level_required=1,
+                                            effect="empower_next_attack", duration=1, power=1.2
+                                        ),
+                                    ])
+                                elif stats["class_path"] == "Cleric":
+                                    player_skills.extend([
+                                        Skill(
+                                            "Heal",
+                                            "Heal yourself for 10 HP.",
+                                            "active", mana_cost=10, stamina_cost=1, cooldown=2,
+                                            required_class="Cleric", rank="C", level_required=1,
+                                            effect="heal", duration=0, power=10
+                                        ),
+                                        Skill(
+                                            "Purify",
+                                            "Weaken enemy (attack -2) for 3 turns.",
+                                            "active", mana_cost=8, stamina_cost=1, cooldown=5,
+                                            required_class="Cleric", rank="D", level_required=1,
+                                            effect="weaken_enemy", duration=3, power=2
+                                        ),
+                                    ])
+                                stdscr.getch()
+                        else:
+                            stdscr.addstr(viewport_height + 4, 0, f"Class quest: Prove yourself to become a {quest['class_name']}.")
+                    else:
+                        if stats["class_path"] != quest["class_name"]:
+                            stdscr.addstr(viewport_height + 4, 0, "You have chosen a different path. You cannot become this class.")
+                        else:
+                            stdscr.addstr(viewport_height + 4, 0, f"Continue your path as a {stats['class_path']}.")
 
-                        elif quest["completed"] and not quest.get("reward_given", False):
-                            reward = quest["reward"]
-                            stats["xp"] += reward["xp"]
-                            stats["skill_points"] += reward["skill_points"]
-                            npc["reward_given"] = True
-                            stdscr.addstr(viewport_height + 4, 0, f"Quest complete! +{reward['xp']} XP, +{reward['skill_points']} SP!")
-                            leveled_up = gain_xp(stats, 0)
-                            if leveled_up:
-                                stdscr.addstr(viewport_height + 5, 0, f"You leveled up to level {stats['level']}! +5 SP!")
-                            quest["completed"] = False
-                            quest["progress"] = 0
-                        elif not quest["completed"]:
-                            stdscr.addstr(viewport_height + 4, 0, f"Quest: Defeat {quest['count']} {quest['target']}s [{quest['progress']}/{quest['count']}]")
-
-
+                elif quest.get("completed") and not quest.get("reward_given", False):
+                    reward = quest["reward"]
+                    stats["xp"] += reward["xp"]
+                    stats["skill_points"] += reward["skill_points"]
+                    quest["reward_given"] = True
+                    stdscr.addstr(viewport_height + 4, 0, f"Quest complete! +{reward['xp']} XP, +{reward['skill_points']} SP!")
+                    leveled_up = gain_xp(stats, 0)
+                    if leveled_up:
+                        stdscr.addstr(viewport_height + 5, 0, f"You leveled up to level {stats['level']}! +5 SP!")
+                    # Reset so it can be repeated
+                    quest["completed"] = False
+                    quest["progress"] = 0
+                elif not quest.get("completed", False) and quest.get("type") == "kill":
+                    stdscr.addstr(viewport_height + 4, 0, f"Quest: Defeat {quest['count']} {quest['target']}s [{quest['progress']}/{quest['count']}]")
 
         stdscr.refresh()
         world[(player_x, player_y)] = '.'
         key = stdscr.getch()
 
-
-        player_skills = []
-
-        # Later in the code, after choosing a class
-        if stats["class_path"] == "Swordsman":
-            player_skills.extend([
-                Skill("Power Strike", "A strong physical attack.", "active", mana_cost=0, stamina_cost = 3, cooldown=5, required_class="Swordsman", rank="C", level_required=1),
-                Skill("Quick Jab", "A fast, weak jab.", "active", mana_cost=0, stamina_cost = 2, cooldown=3, required_class="Swordsman", rank="D", level_required=1),
-            ])
-        elif stats["class_path"] == "Mage":
-            player_skills.extend([
-                Skill("Fireball", "A ball of fire.", "active", mana_cost=8, stamina_cost = 1, cooldown=7, required_class="Mage", rank="C", level_required=1),
-                Skill("Arcane Bolt", "A bolt of arcane energy.", "active", mana_cost=4, stamina_cost = 1, cooldown=6, required_class="Mage", rank="D", level_required=1),
-            ])
-        
-        elif stats["class_path"] == "Cleric":
-            player_skills.extend([
-                Skill("Heal", "A pulse of holy light heals allies.", "active", mana_cost=10, stamina_cost = 1, cooldown=2, required_class="Cleric", rank="C", level_required=1),
-                Skill("Purify", "A pulse of holy light weakens enemies.", "active", mana_cost=8, stamina_cost = 1, cooldown=5, required_class="Cleric", rank="D", level_required=1),
-            ])
-
-
-        #These are the commands to quit, upgrade, save, and load
+        # Controls
         if key == ord('q'):
             break
         elif key == ord('u'):
             upgrade_menu(stdscr, stats)
         elif key == ord('i'):
-            inventory_menu(stdscr,inventory, stats)
+            inventory_menu(stdscr, inventory, stats)
         elif key == ord('s'):
-            save_game(stats, player_x, player_y)
+            save_game(stats, player_x, player_y, npcs)
         elif key == ord('p'):
             skill_menu(stdscr, player_skills)
-        elif key == ord('k'):  # or any unused key
+        elif key == ord('k'):
             rename_skill_menu(stdscr, player_skills)
         elif key == ord('l'):
-            loaded = load_game()
+            loaded = load_game(npcs)
             if loaded:
                 stats, player_x, player_y = loaded
-        #These determine the moves of the user
         elif key == curses.KEY_UP:
             player_y -= 1
         elif key == curses.KEY_DOWN:
@@ -639,12 +737,11 @@ def main(stdscr):
 
         current_tile = (player_x, player_y)
 
-        # Only trigger battle if in a bush zone
+        # Battle triggers
         for zone_name, zone in bush_zones.items():
             if current_tile in zone["tiles"]:
                 level_range = zone["level_range"]
 
-                # Determine monster list and spawn chance
                 if zone_name == "slime":
                     if random.random() < 0.20:
                         if not battle(stdscr, "Slime", stats, inventory, player_skills, level_range):
@@ -663,7 +760,9 @@ def main(stdscr):
                         chosen = pick_monster(monsters)
                         if not battle(stdscr, chosen, stats, inventory, player_skills, level_range):
                             player_x, player_y = 0, 0
-                break  # Only one zone can apply
-            
-#Starts the game
+                break
+
+# =============================
+# Launch
+# =============================
 curses.wrapper(main)
