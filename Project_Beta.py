@@ -147,100 +147,152 @@ def load_game():
     return None
 
 #This is how the user fights moonsters
-def battle(stdscr, monster_name, stats, inventory, skills, level_range=(1, 1),):
-    empowered = 1
+def battle(stdscr, monster_name, stats, inventory, skills, level_range=(1, 1)):
+    # --- One-turn empower state ---
+    empowered_mult = 1.0
+    empowered_turns = 0  # when >0, apply on next 'attack' and then reset
+
     monster = create_monster(monster_name, level_range)
     player_hp = stats["hp"]
-    player_mp = stats["current_mana"]  # Start with current mana
     monster_hp = monster.hp
     weapon_damage = inventory[stats["wielded_index"]].damage if stats.get("wielded_index") is not None else 0
 
+    # cooldowns tracked by skill.name
     skill_cooldowns = {skill.name: 0 for skill in skills}
-    last_action = "attack"  # Default action
+    last_action = "attack"  # default action
 
     while player_hp > 0 and monster_hp > 0:
         stdscr.clear()
         stdscr.addstr(0, 0, f"{monster.name} (Lv {monster.level}) HP: {monster_hp}")
         stdscr.addstr(1, 0, f"Your HP: {player_hp}, MP: {stats['current_mana']}/{stats['mana']}")
-        stdscr.addstr(3, 0, "Press a number key to change skill, or just press Enter to continue.")
+        stdscr.addstr(3, 0, "1-9 to choose a skill, 'a' to attack, Enter to repeat last action.")
         stdscr.refresh()
 
-        stdscr.timeout(1000)  # 1 second to change action, else continue
+        stdscr.timeout(1000)  # 1 second to change action, else continue with last_action
         key = stdscr.getch()
         stdscr.timeout(-1)
 
-        # Skill selection
+        # --- Skill selection ---
         if ord('1') <= key <= ord(str(min(9, len(skills)))):
             idx = key - ord('1')
-            chosen_skill = skills[idx]
-            last_action = chosen_skill.name
+            last_action = skills[idx].name
         elif key == ord('a'):
             last_action = "attack"
+        # else: keep last_action
 
-
-        # ---- Player action ----
+        # --- Resolve Player action ---
         if last_action == "attack":
-            damage = max(stats["attack"] + weapon_damage - 1, 1)
-            monster_hp -= damage
-            stdscr.addstr(5, 0, f"You attack for {damage} damage!")
+            # include monster.defense so debuffs matter
+            base = stats["attack"] + weapon_damage - monster.defense
+            dmg = max(int(base * (empowered_mult if empowered_turns > 0 else 1.0)), 1)
+            monster_hp -= dmg
+            if empowered_turns > 0:
+                stdscr.addstr(5, 0, f"Empowered strike! You attack for {dmg} damage!")
+                empowered_turns = 0
+                empowered_mult = 1.0
+            else:
+                stdscr.addstr(5, 0, f"You attack for {dmg} damage!")
+
         else:
+            # Using a skill by name
             skill_obj = next((sk for sk in skills if sk.name == last_action), None)
 
-            if skill_obj.effect == "damage_buff":
-                empowered = skill_obj.effect
-                stdscr.addstr(5, 0, "Your entire body glows with power!")
-            elif skill_obj.effect == "mons_defense_debuff":
-                monster.defense = max(0, monster.defense - skill_obj.power)
-
-
-
-
-            if (
-                skill_obj
-                and stats["level"] >= skill_obj.level_required
-                and stats["current_mana"] >= skill_obj.mana_cost
-                and skill_cooldowns[skill_obj.name] == 0
-            ):
-                player_mp -= skill_obj.mana_cost
-                skill_cooldowns[skill_obj.name] = skill_obj.cooldown
-
-                if skill_obj.name == "Fireball":
-                    dmg = stats["attack"] + 5
-                    monster_hp -= dmg
-                    stdscr.addstr(5, 0, f"You cast Fireball for {dmg} damage!")
-                elif skill_obj.name == "Heal":
-                    heal = 10
-                    player_hp += heal
-                    stdscr.addstr(5, 0, f"You heal for {heal} HP!")
-                else:
-                    dmg = stats["attack"] + 3
-                    monster_hp -= dmg
-                    stdscr.addstr(5, 0, f"You use {skill_obj.custom_name} for {dmg} damage!")
-            else:
-                damage = max(stats["attack"] + weapon_damage - 1, 1)
-                monster_hp -= damage
-                stdscr.addstr(5, 0, f"{last_action} unavailable, you attack for {damage} damage!")
+            if not skill_obj:
+                # safety fallback
+                base = stats["attack"] + weapon_damage - monster.defense
+                dmg = max(int(base), 1)
+                monster_hp -= dmg
+                stdscr.addstr(5, 0, f"(Unknown skill) You attack for {dmg} damage.")
                 last_action = "attack"
+            else:
+                # Check requirements BEFORE applying effects
+                can_use = (
+                    stats["level"] >= skill_obj.level_required
+                    and stats["current_mana"] >= skill_obj.mana_cost
+                    and skill_cooldowns.get(skill_obj.name, 0) == 0
+                )
 
-        # ---- Monster action ----
+                if not can_use:
+                    # fallback basic attack if skill not available
+                    base = stats["attack"] + weapon_damage - monster.defense
+                    dmg = max(int(base), 1)
+                    monster_hp -= dmg
+                    stdscr.addstr(5, 0, f"{skill_obj.custom_name} unavailable, you attack for {dmg} damage!")
+                    last_action = "attack"
+                else:
+                    # pay costs & set cooldowns
+                    stats["current_mana"] -= skill_obj.mana_cost
+                    skill_cooldowns[skill_obj.name] = skill_obj.cooldown
+
+                    # --- Handle effects ---
+                    if skill_obj.effect == "damage_buff":
+                        # buff the NEXT attack only
+                        empowered_mult = float(skill_obj.power or 1.8)
+                        empowered_turns = 1
+                        stdscr.addstr(5, 0, "Your entire body glows with power! Your next attack will be stronger.")
+                        last_action = "attack"  # default next action to attack so it flows
+
+                    elif skill_obj.effect == "mons_defense_debuff":
+                        # If power < 1.0, treat as multiplicative; else treat as flat reduction
+                        p = skill_obj.power
+                        if p is None:
+                            p = 0.9
+                        if p < 1.0:
+                            monster.defense = max(0, int(monster.defense * p))
+                            stdscr.addstr(5, 0, "You weaken the foe's guard! Their defense drops.")
+                        else:
+                            monster.defense = max(0, monster.defense - int(p))
+                            stdscr.addstr(5, 0, "You pierce their armor! Their defense drops.")
+                        last_action = "attack"
+
+                    elif skill_obj.effect == "hp_buff":
+                        # simple heal based on level or power
+                        heal = int(stats["level"] * 2) if skill_obj.power in (None, 0) else int(skill_obj.power)
+                        player_hp += heal
+                        stdscr.addstr(5, 0, f"You bless yourself and heal {heal} HP.")
+                        last_action = "attack"
+
+                    else:
+                        # Example direct-damage skills by name (Fireball, Arcane Bolt), if present
+                        if skill_obj.name == "Fireball":
+                            base = stats["attack"] + 5 - monster.defense
+                            dmg = max(int(base), 1)
+                            monster_hp -= dmg
+                            stdscr.addstr(5, 0, f"You cast Fireball for {dmg} damage!")
+                        elif skill_obj.name == "Arcane Bolt":
+                            base = stats["attack"] + 3 - monster.defense
+                            dmg = max(int(base), 1)
+                            monster_hp -= dmg
+                            stdscr.addstr(5, 0, f"You fire an Arcane Bolt for {dmg} damage!")
+                        else:
+                            # generic active: small hit
+                            base = stats["attack"] + 2 - monster.defense
+                            dmg = max(int(base), 1)
+                            monster_hp -= dmg
+                            stdscr.addstr(5, 0, f"You use {skill_obj.custom_name} for {dmg} damage!")
+                        # keep last_action as the skill you just used; Enter will repeat unless player presses 'a'
+                        # If you prefer to revert to attack next turn, uncomment:
+                        last_action = "attack"
+
+        # --- Monster action ---
         if monster_hp > 0:
-            damage = max(monster.attack - stats["defense"], 1)
-            player_hp -= damage
-            stdscr.addstr(7, 0, f"{monster.name} hits you for {damage} damage!")
+            incoming = max(monster.attack - stats["defense"], 1)
+            player_hp -= incoming
+            stdscr.addstr(7, 0, f"{monster.name} hits you for {incoming} damage!")
 
-        # ---- Cooldowns ----
+        # --- Cooldowns tick ---
         for name in skill_cooldowns:
             if skill_cooldowns[name] > 0:
                 skill_cooldowns[name] -= 1
 
-        # ---- Mana regeneration (1 per sec) ----
+        # --- Mana regen (1 per second) ---
         if stats["current_mana"] < stats["mana"]:
             stats["current_mana"] = min(stats["mana"], stats["current_mana"] + 1)
 
         stdscr.refresh()
         time.sleep(1)
 
-    # ---- Battle result ----
+    # --- Battle result ---
     stdscr.clear()
     if player_hp > 0:
         base_xp = {"Slime": 5, "Goblin": 10, "Kobold": 15, "Orc": 40}.get(monster.name.replace("Elite ", ""), 5)
@@ -254,9 +306,9 @@ def battle(stdscr, monster_name, stats, inventory, skills, level_range=(1, 1),):
         # Quest progress
         for npc in npcs.values():
             quest = npc.get("quest")
-            if quest and not quest["completed"]:
-                if quest["type"] == "kill" and quest["target"] == monster.name:
-                    quest["progress"] += 1
+            if quest and not quest.get("completed", False):
+                if quest.get("type") == "kill" and quest.get("target") == monster.name:
+                    quest["progress"] = quest.get("progress", 0) + 1
                     if quest["progress"] >= quest["count"]:
                         quest["completed"] = True
 
@@ -418,7 +470,7 @@ npcs = {
         "dialogue": "An agitated farmer paces back in forth, muttering, 'Those disgusting orcs...' ",
         "quest": {
             "type": "kill", "target": "Orc", "count": 1,
-            "progress": 0, "reward": {"xp": 100, "skill_points": 0},
+            "progress": 0, "reward": {"xp": 100, "skill_points": 1},
             "completed": False
         }
     },
@@ -442,8 +494,16 @@ npcs = {
             "type": "class", "class_name": "Cleric",
             "accepted": False, "completed": False
         }
-    }
+    },
     
+    (0, 4): {
+        "dialogue": "A merchant shows off their sales",
+        "quest": {
+            "type": "gold"
+        }
+    }
+
+
 }
 
 #This sets the cursor state
@@ -609,8 +669,8 @@ def main(stdscr):
         # Later in the code, after choosing a class
         if stats["class_path"] == "Swordsman":
             player_skills.extend([
-                Skill("Power Strike", "A strong physical attack.", "active", mana_cost=0, stamina_cost = 3, cooldown=5, required_class="Swordsman", rank="C", level_required=1, effect = "damage_buff", duration = 1, power = 2),
-                Skill("Quick Jab", "A fast, weak jab.", "active", mana_cost=0, stamina_cost = 2, cooldown=3, required_class="Swordsman", rank="D", level_required=1, effect = "mons_defense_debuff", duration = 2, power = 0.8),
+                Skill("Power Strike", "Empowers your next attack to do 2.5x the damage.", "active", mana_cost=0, stamina_cost = 3, cooldown=5, required_class="Swordsman", rank="C", level_required=1, effect = "damage_buff", duration = 1, power = 2.5),
+                Skill("Quick Jab", "A fast, weak jab drops the opposing parties defense by 0.1.", "active", mana_cost=0, stamina_cost = 2, cooldown=3, required_class="Swordsman", rank="D", level_required=1, effect = "mons_defense_debuff", duration = 2, power = 0.8),
             ])
         elif stats["class_path"] == "Mage":
             player_skills.extend([
@@ -662,21 +722,21 @@ def main(stdscr):
                 # Determine monster list and spawn chance
                 if zone_name == "slime":
                     if random.random() < 0.20:
-                        if not battle(stdscr, "Slime", stats, inventory, player_skills, level_range, stats["class_path"]):
+                        if not battle(stdscr, "Slime", stats, inventory, player_skills, level_range):
                             player_x, player_y = 0, 0
                 elif zone_name == "goblin":
                     if random.random() < 0.10:
-                        if not battle(stdscr, "Goblin", stats, inventory, player_skills, level_range, stats["class_path"]):
+                        if not battle(stdscr, "Goblin", stats, inventory, player_skills, level_range):
                             player_x, player_y = 0, 0
                 elif zone_name == "orc":
                     if random.random() < 0.08:
-                        if not battle(stdscr, "Orc", stats, inventory, player_skills, level_range, stats["class_path"]):
+                        if not battle(stdscr, "Orc", stats, inventory, player_skills, level_range):
                             player_x, player_y = 0, 0
                 elif zone_name == "mixed":
                     if random.random() < 0.15:
                         monsters = [("Slime", 0.4), ("Goblin", 0.3), ("Kobold", 0.2), ("Orc", 0.1)]
                         chosen = pick_monster(monsters)
-                        if not battle(stdscr, chosen, stats, inventory, player_skills, level_range, stats["class_path"]):
+                        if not battle(stdscr, chosen, stats, inventory, player_skills, level_range):
                             player_x, player_y = 0, 0
                 break  # Only one zone can apply
             
