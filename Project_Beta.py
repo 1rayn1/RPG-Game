@@ -422,6 +422,8 @@ def inventory_menu(stdscr, inventory, stats):
     while True:
         stdscr.clear()
         stdscr.addstr(0, 0, "== Inventory ==")
+        stdscr.addstr(0, 50, "== Currency ==")
+        stdscr.addstr(1, 50, f"Gold: {stats['gold']}")
 
         if not inventory:
             stdscr.addstr(1, 0, "Your inventory is empty.")
@@ -546,12 +548,18 @@ def main(stdscr):
     }
 
     stats = {
-        "hp": 20, "attack": 5, "defense": 1, "speed": 2,
+        "hp": 20, 
+        "attack": 5, 
+        "defense": 1, 
+        "speed": 2,
         "mana": 10,  # Max mana
         "current_mana": 10,  # Current mana (changes in battle)
-        "skill_points": 0, "xp": 0, "level": 1,
+        "skill_points": 0, 
+        "xp": 0, 
+        "level": 1, 
+        "gold": 1,
         "wielded_index": None,
-        "class_path": None
+        "class_path": None,
     }
 
     inventory = []
@@ -691,7 +699,7 @@ def main(stdscr):
         elif key == ord('u'):
             upgrade_menu(stdscr, stats)
         elif key == ord('i'):
-            inventory_menu(stdscr,inventory, stats)
+            inventory_menu(stdscr, inventory, stats)
         elif key == ord('s'):
             save_game(stats, player_x, player_y)
         elif key == ord('p'):

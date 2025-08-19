@@ -1,1 +1,55 @@
-{"stats": {"hp": 66, "attack": 15, "defense": 14, "speed": 9, "mana": 30, "skill_points": 0, "xp": 64, "level": 12, "wielded_index": null, "class_path": "Swordsman", "current_mana": 30}, "player_x": -2, "player_y": -1, "quests": {"(0, 1)": {"progress": 1, "completed": false, "reward_given": false}, "(10, 9)": {"progress": 2, "completed": true, "reward_given": false}, "(-5, -4)": {"progress": 0, "completed": false, "reward_given": false}, "(-1, 0)": {"progress": 0, "completed": false, "reward_given": false}, "(1, 0)": {"progress": 0, "completed": false, "reward_given": false}, "(0, -1)": {"progress": 0, "completed": false, "reward_given": false}, "(0, 4)": {"progress": 0, "completed": false, "reward_given": false}}}
+{
+    "stats": {
+        "hp": 66,
+        "attack": 15,
+        "defense": 14,
+        "speed": 9,
+        "mana": 30,
+        "skill_points": 2000,
+        "xp": 64,
+        "level": 12,
+        "gold": 0,
+        "wielded_index": null,
+        "class_path": "Swordsman",
+        "current_mana": 30
+    },
+    "player_x": -2,
+    "player_y": -1,
+    "quests": {
+        "(0, 1)": {
+            "progress": 1,
+            "completed": false,
+            "reward_given": false
+        },
+        "(10, 9)": {
+            "progress": 2,
+            "completed": true,
+            "reward_given": false
+        },
+        "(-5, -4)": {
+            "progress": 0,
+            "completed": false,
+            "reward_given": false
+        },
+        "(-1, 0)": {
+            "progress": 0,
+            "completed": false,
+            "reward_given": false
+        },
+        "(1, 0)": {
+            "progress": 0,
+            "completed": false,
+            "reward_given": false
+        },
+        "(0, -1)": {
+            "progress": 0,
+            "completed": false,
+            "reward_given": false
+        },
+        "(0, 4)": {
+            "progress": 0,
+            "completed": false,
+            "reward_given": false
+        }
+    }
+}
