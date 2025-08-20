@@ -109,6 +109,33 @@ def gain_xp(stats, amount):
         leveled_up = True
     return leveled_up
 
+def new_game():
+    stats = {
+        "hp": 20, 
+        "attack": 5, 
+        "defense": 1, 
+        "speed": 2,
+        "mana": 10,  # Max mana
+        "current_mana": 10,  # Current mana (changes in battle)
+        "skill_points": 0, 
+        "xp": 0, 
+        "level": 1, 
+        "gold": 1,
+        "wielded_index": None,
+        "class_path": None,
+    }
+    inventory = []
+    starter_sword = Item("Rusty Sword", damage=3, dex=0, crit=1, mana=0)
+    inventory.append(starter_sword)
+
+    # Starting coordinates
+    player_x, player_y = 0, 0
+
+    return stats, inventory, player_x, player_y
+
+
+
+
 #Saves the game to savegame.json
 def save_game(stats, player_x, player_y):
     data = {
@@ -547,36 +574,19 @@ def main(stdscr):
         'W': [(x, 0) for x in range(-20, 21)] + [(0, y) for y in range(-20, 21)]
     }
 
-    stats = {
-        "hp": 20, 
-        "attack": 5, 
-        "defense": 1, 
-        "speed": 2,
-        "mana": 10,  # Max mana
-        "current_mana": 10,  # Current mana (changes in battle)
-        "skill_points": 0, 
-        "xp": 0, 
-        "level": 1, 
-        "gold": 1,
-        "wielded_index": None,
-        "class_path": None,
-    }
-
-    inventory = []
-    starter_sword = Item("Rusty Sword", damage=3, dex=0, crit=1, mana=0)
-    inventory.append(starter_sword)
-
-    #The starting coordinates(Unless you moved before, and the game is saved)
-    player_x, player_y = 0, 0
     choice = start_menu(stdscr)
     if choice == "Load Game":
         loaded = load_game()
         if loaded:
             stats, player_x, player_y = loaded
+            inventory = []  # if you want inventory persistence, load it too later
         else:
             stdscr.addstr(0, 0, "No save found. Starting new game.")
             stdscr.refresh()
             time.sleep(1)
+            stats, inventory, player_x, player_y = new_game()
+    elif choice == "New Game":
+        stats, inventory, player_x, player_y = new_game()
     elif choice == "Quit":
         return
 
