@@ -476,6 +476,14 @@ def inventory_menu(stdscr, inventory, stats):
             else:
                 stats["wielded_index"] = index
 
+def help_menu(stdscr):
+    while True:
+        stdscr.clear()
+        stdscr.addstr(0, 0, "== Help Menu ==")
+        stdscr.addstr(1,0, "The purpose of this game is to level up characters 'till infinity and beyond.")
+        stdscr.addstr(2,0, "'P' on the map stands for the player, 'B' stands for bushes, and 'N' stands for bushes. There will be monsters in bushes")
+        stdscr.addstr(3,0, "You cannot control the battles, but you can choose when to use select skills.")
+
 
 # === Global NPC dictionary with quests ===
 npcs = {
@@ -634,7 +642,7 @@ def main(stdscr):
                         stdscr.addstr(y, screen_x, world.get((world_x, world_y), ".") + " ")
 
         stdscr.addstr(viewport_height + 1, 0, f"Level: {stats['level']} XP: {stats['xp']}/{stats['level'] * 10} Skill Pts: {stats['skill_points']}")
-        stdscr.addstr(viewport_height + 2, 0, "Arrows = move | q = quit | u = upgrade | i = inventory | k = skill rename | p = skill window | s = save | l = load")
+        stdscr.addstr(viewport_height + 2, 0, "Arrows = move | q = quit | u = upgrade | i = inventory | k = skill rename | p = skill window | s = save | l = load | h = help")
 
         #This is the npc part
         if (player_x, player_y) in npcs:
@@ -714,6 +722,8 @@ def main(stdscr):
             save_game(stats, player_x, player_y)
         elif key == ord('p'):
             skill_menu(stdscr, player_skills)
+        elif key == ord('h'):
+            help_menu(stdscr)
         elif key == ord('k'):  # or any unused key
             rename_skill_menu(stdscr, player_skills)
         elif key == ord('l'):
