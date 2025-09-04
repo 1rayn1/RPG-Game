@@ -481,9 +481,14 @@ def help_menu(stdscr):
         stdscr.clear()
         stdscr.addstr(0, 0, "== Help Menu ==")
         stdscr.addstr(1,0, "The purpose of this game is to level up characters 'till infinity and beyond.")
-        stdscr.addstr(2,0, "'P' on the map stands for the player, 'B' stands for bushes, and 'N' stands for bushes. There will be monsters in bushes")
+        stdscr.addstr(2,0, "'P' on the map stands for the player, 'B' stands for bushes, and 'N' stands for bushes. There will be monsters in bushes.")
         stdscr.addstr(3,0, "You cannot control the battles, but you can choose when to use select skills.")
+        stdscr.addstr(5,0,"Press 'b' to go back.")
+        stdscr.refresh()
+        key = stdscr.getch()
 
+        if key == ord('b'):
+            break
 
 # === Global NPC dictionary with quests ===
 npcs = {
